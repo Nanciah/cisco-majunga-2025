@@ -1,0 +1,26 @@
+services:
+  - type: web
+    name: cisco-backend
+    env: node
+    region: oregon
+    plan: free
+    buildCommand: cd backend && npm install
+    startCommand: cd backend && node server.js
+    envVars:
+      JWT_SECRET: sisco_majunga_2025_nanciah_super_secret
+
+  - type: static
+    name: cisco-frontend
+    buildCommand: cd frontend && npm install && npm run build
+    staticPublishPath: frontend/build
+    routes:
+      - type: rewrite
+        source: /**
+        target: /index.html
+
+databases:
+  - name: cisco-mysql
+    databaseName: sisco_db
+    user: cisco_user
+    plan: free
+    region: oregon
