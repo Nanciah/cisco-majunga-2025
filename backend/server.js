@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const mysql = require('mysql2/promise');
+const { Pool } = require('pg');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 require('dotenv').config();
@@ -12,13 +12,20 @@ const PORT = process.env.PORT || 5000;
 app.use(cors());
 app.use(express.json());
 
-// Configuration de la base de données
-const dbConfig = {
-    host: process.env.DB_HOST || 'localhost',
-    user: process.env.DB_USER || 'root',
-    password: process.env.DB_PASSWORD || '',
-    database: process.env.DB_NAME || 'sisco_db'
-};
+// Configuration PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DB_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
+  ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+});
+
+// Test de connexion PostgreSQL
+pool.on('connect', () => {
+  console.log('✅ Connecté à PostgreSQL avec succès');
+});
+
+pool.on('error', (err) => {
+  console.error('❌ Erreur connexion PostgreSQL:', err);
+});
 
 // Middleware d'authentification
 const authenticateToken = (req, res, next) => {
@@ -41,26 +48,25 @@ const authenticateToken = (req, res, next) => {
 // Test de connexion à la base de données
 app.get('/api/test-db', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        await connection.execute('SELECT 1');
-        await connection.end();
-        res.json({ message: 'Connexion à la base de données réussie' });
+        const result = await pool.query('SELECT NOW() as current_time');
+        res.json({ 
+            message: 'Connexion à PostgreSQL réussie',
+            time: result.rows[0].current_time
+        });
     } catch (error) {
-        res.status(500).json({ error: 'Erreur de connexion à la base de données: ' + error.message });
+        res.status(500).json({ error: 'Erreur de connexion à PostgreSQL: ' + error.message });
     }
 });
 
 // Routes publiques pour les établissements
 app.get('/api/etablissements', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute(`
+        const result = await pool.query(`
             SELECT id, code, nom, secteur, niveau, commune, zap, fokontany, village, remarques
             FROM etablissements 
             ORDER BY nom
         `);
-        await connection.end();
-        res.json(rows);
+        res.json(result.rows);
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -70,7 +76,6 @@ app.get('/api/etablissements', async (req, res) => {
 app.get('/api/etablissements/search', async (req, res) => {
     try {
         const { q, secteur, niveau } = req.query;
-        const connection = await mysql.createConnection(dbConfig);
         
         let query = `
             SELECT id, code, nom, secteur, niveau, commune, zap, fokontany, village, remarques
@@ -79,26 +84,27 @@ app.get('/api/etablissements/search', async (req, res) => {
         const params = [];
 
         if (q) {
-            query += ' AND (nom LIKE ? OR code LIKE ? OR commune LIKE ? OR fokontany LIKE ?)';
+            query += ' AND (nom ILIKE $1 OR code ILIKE $2 OR commune ILIKE $3 OR fokontany ILIKE $4)';
             const searchTerm = `%${q}%`;
             params.push(searchTerm, searchTerm, searchTerm, searchTerm);
         }
 
         if (secteur) {
-            query += ' AND secteur = ?';
+            const paramIndex = params.length + 1;
+            query += ` AND secteur = $${paramIndex}`;
             params.push(secteur);
         }
 
         if (niveau) {
-            query += ' AND niveau = ?';
+            const paramIndex = params.length + 1;
+            query += ` AND niveau = $${paramIndex}`;
             params.push(niveau);
         }
 
         query += ' ORDER BY nom';
 
-        const [rows] = await connection.execute(query, params);
-        await connection.end();
-        res.json(rows);
+        const result = await pool.query(query, params);
+        res.json(result.rows);
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -114,23 +120,19 @@ app.post('/api/etablissements/login', async (req, res) => {
             return res.status(400).json({ error: 'Login et mot de passe requis' });
         }
 
-        const connection = await mysql.createConnection(dbConfig);
-        
-        const [rows] = await connection.execute(
-            'SELECT * FROM etablissements WHERE login = ?',
+        const result = await pool.query(
+            'SELECT * FROM etablissements WHERE login = $1',
             [login]
         );
 
-        if (rows.length === 0) {
-            await connection.end();
+        if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Établissement non trouvé' });
         }
 
-        const etablissement = rows[0];
+        const etablissement = result.rows[0];
         
         // Vérification du mot de passe (identique pour tous)
         if (password !== etablissement.password) {
-            await connection.end();
             return res.status(401).json({ error: 'Mot de passe incorrect' });
         }
 
@@ -145,7 +147,6 @@ app.post('/api/etablissements/login', async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        await connection.end();
         res.json({
             token,
             etablissement: {
@@ -171,23 +172,19 @@ app.post('/api/admin/login', async (req, res) => {
             return res.status(400).json({ error: 'Username et mot de passe requis' });
         }
 
-        const connection = await mysql.createConnection(dbConfig);
-        
-        const [rows] = await connection.execute(
-            'SELECT * FROM administrateurs WHERE username = ?',
+        const result = await pool.query(
+            'SELECT * FROM administrateurs WHERE username = $1',
             [username]
         );
 
-        if (rows.length === 0) {
-            await connection.end();
+        if (result.rows.length === 0) {
             return res.status(401).json({ error: 'Administrateur non trouvé' });
         }
 
-        const admin = rows[0];
+        const admin = result.rows[0];
         
         // Vérification simple du mot de passe
         if (password !== admin.password) {
-            await connection.end();
             return res.status(401).json({ error: 'Mot de passe incorrect' });
         }
 
@@ -204,7 +201,6 @@ app.post('/api/admin/login', async (req, res) => {
             { expiresIn: '24h' }
         );
 
-        await connection.end();
         res.json({
             token,
             admin: {
@@ -224,10 +220,8 @@ app.post('/api/admin/login', async (req, res) => {
 // Routes pour les examens
 app.get('/api/examens', async (req, res) => {
     try {
-        const connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute('SELECT * FROM examens ORDER BY id');
-        await connection.end();
-        res.json(rows);
+        const result = await pool.query('SELECT * FROM examens ORDER BY id');
+        res.json(result.rows);
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -247,8 +241,6 @@ app.post('/api/inscriptions', authenticateToken, async (req, res) => {
             return res.status(400).json({ error: 'Données invalides' });
         }
 
-        const connection = await mysql.createConnection(dbConfig);
-        
         const results = [];
         
         for (const eleve of eleves) {
@@ -258,10 +250,10 @@ app.post('/api/inscriptions', authenticateToken, async (req, res) => {
             
             const numero_inscription = `INS${Date.now()}${Math.random().toString(36).substr(2, 9)}`;
             
-            const [result] = await connection.execute(
+            const result = await pool.query(
                 `INSERT INTO inscriptions 
                 (etablissement_id, examen_id, eleve_nom, eleve_prenom, date_naissance, lieu_naissance, classe, numero_inscription) 
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
                 [
                     req.user.id,
                     examen_id,
@@ -275,13 +267,12 @@ app.post('/api/inscriptions', authenticateToken, async (req, res) => {
             );
             
             results.push({
-                id: result.insertId,
+                id: result.rows[0].id,
                 numero_inscription,
                 ...eleve
             });
         }
 
-        await connection.end();
         res.json({ 
             message: `${results.length} inscription(s) enregistrée(s) avec succès`, 
             inscriptions: results 
@@ -298,17 +289,15 @@ app.get('/api/etablissement/inscriptions', authenticateToken, async (req, res) =
             return res.status(403).json({ error: 'Accès non autorisé' });
         }
 
-        const connection = await mysql.createConnection(dbConfig);
-        const [rows] = await connection.execute(`
+        const result = await pool.query(`
             SELECT i.*, e.nom as examen_nom 
             FROM inscriptions i 
             JOIN examens e ON i.examen_id = e.id 
-            WHERE i.etablissement_id = ? 
+            WHERE i.etablissement_id = $1 
             ORDER BY i.date_inscription DESC
         `, [req.user.id]);
 
-        await connection.end();
-        res.json(rows);
+        res.json(result.rows);
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -323,7 +312,6 @@ app.get('/api/admin/inscriptions', authenticateToken, async (req, res) => {
         }
 
         const { statut, etablissement_id } = req.query;
-        const connection = await mysql.createConnection(dbConfig);
         
         let query = `
             SELECT i.*, e.nom as etablissement_nom, e.code as etablissement_code, ex.nom as examen_nom
@@ -333,22 +321,24 @@ app.get('/api/admin/inscriptions', authenticateToken, async (req, res) => {
             WHERE 1=1
         `;
         const params = [];
+        let paramCount = 0;
 
         if (statut) {
-            query += ' AND i.statut = ?';
+            paramCount++;
+            query += ` AND i.statut = $${paramCount}`;
             params.push(statut);
         }
 
         if (etablissement_id) {
-            query += ' AND i.etablissement_id = ?';
+            paramCount++;
+            query += ` AND i.etablissement_id = $${paramCount}`;
             params.push(etablissement_id);
         }
 
         query += ' ORDER BY i.date_inscription DESC';
 
-        const [rows] = await connection.execute(query, params);
-        await connection.end();
-        res.json(rows);
+        const result = await pool.query(query, params);
+        res.json(result.rows);
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -362,16 +352,14 @@ app.put('/api/admin/inscriptions/:id', authenticateToken, async (req, res) => {
         }
 
         const { statut, salle_examen, centre_examen } = req.body;
-        const connection = await mysql.createConnection(dbConfig);
         
-        await connection.execute(
+        await pool.query(
             `UPDATE inscriptions 
-            SET statut = ?, salle_examen = ?, centre_examen = ? 
-            WHERE id = ?`,
+            SET statut = $1, salle_examen = $2, centre_examen = $3 
+            WHERE id = $4`,
             [statut, salle_examen, centre_examen, req.params.id]
         );
 
-        await connection.end();
         res.json({ message: 'Inscription mise à jour avec succès' });
     } catch (error) {
         console.error('Erreur:', error);
@@ -386,29 +374,25 @@ app.get('/api/admin/stats', authenticateToken, async (req, res) => {
             return res.status(403).json({ error: 'Accès non autorisé' });
         }
 
-        const connection = await mysql.createConnection(dbConfig);
-        
-        const [inscriptionsStats] = await connection.execute(`
+        const inscriptionsStats = await pool.query(`
             SELECT 
                 COUNT(*) as total,
-                SUM(statut = 'en_attente') as en_attente,
-                SUM(statut = 'accepte') as accepte,
-                SUM(statut = 'refuse') as refuse
+                SUM(CASE WHEN statut = 'en_attente' THEN 1 ELSE 0 END) as en_attente,
+                SUM(CASE WHEN statut = 'accepte' THEN 1 ELSE 0 END) as accepte,
+                SUM(CASE WHEN statut = 'refuse' THEN 1 ELSE 0 END) as refuse
             FROM inscriptions
         `);
 
-        const [etablissementsStats] = await connection.execute(`
+        const etablissementsStats = await pool.query(`
             SELECT 
                 COUNT(*) as total_etablissements,
                 COUNT(DISTINCT etablissement_id) as etablissements_actifs
             FROM inscriptions
         `);
-
-        await connection.end();
         
         res.json({
-            inscriptions: inscriptionsStats[0],
-            etablissements: etablissementsStats[0]
+            inscriptions: inscriptionsStats.rows[0],
+            etablissements: etablissementsStats.rows[0]
         });
     } catch (error) {
         console.error('Erreur stats:', error);
