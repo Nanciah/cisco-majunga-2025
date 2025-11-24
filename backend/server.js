@@ -402,6 +402,120 @@ app.get('/api/admin/stats', authenticateToken, async (req, res) => {
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
     }
 });
+// === ROUTE TEMPORAIRE POUR INITIALISATION BD - À SUPPRIMER APRÈS ===
+app.get('/api/init-database', async (req, res) => {
+  try {
+    console.log('🔄 Début de l initialisation de la base de données...');
+
+    // 1. Table des administrateurs
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS administrateurs (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(50) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        nom VARCHAR(100) NOT NULL,
+        prenom VARCHAR(100) NOT NULL,
+        role VARCHAR(50) DEFAULT 'admin',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table administrateurs créée');
+
+    // 2. Table des établissements
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS etablissements (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(20) UNIQUE NOT NULL,
+        nom VARCHAR(255) NOT NULL,
+        login VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        secteur VARCHAR(50),
+        niveau VARCHAR(50),
+        commune VARCHAR(100),
+        zap VARCHAR(100),
+        fokontany VARCHAR(100),
+        village VARCHAR(100),
+        remarques TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table etablissements créée');
+
+    // 3. Table des examens
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS examens (
+        id SERIAL PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        annee INTEGER NOT NULL,
+        date_debut DATE,
+        date_fin DATE,
+        statut VARCHAR(50) DEFAULT 'actif',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table examens créée');
+
+    // 4. Table des inscriptions
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inscriptions (
+        id SERIAL PRIMARY KEY,
+        etablissement_id INTEGER REFERENCES etablissements(id),
+        examen_id INTEGER REFERENCES examens(id),
+        eleve_nom VARCHAR(255) NOT NULL,
+        eleve_prenom VARCHAR(255) NOT NULL,
+        date_naissance DATE NOT NULL,
+        lieu_naissance VARCHAR(255),
+        classe VARCHAR(50),
+        numero_inscription VARCHAR(100) UNIQUE NOT NULL,
+        statut VARCHAR(50) DEFAULT 'en_attente',
+        salle_examen VARCHAR(50),
+        centre_examen VARCHAR(255),
+        date_inscription TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table inscriptions créée');
+
+    // 5. Insertion administrateur par défaut
+    await pool.query(`
+      INSERT INTO administrateurs (username, password, nom, prenom, role) 
+      VALUES ('admin', 'admin123', 'Admin', 'System', 'superadmin')
+      ON CONFLICT (username) DO NOTHING
+    `);
+    console.log('✅ Administrateur par défaut créé');
+
+    // 6. Insertion examen exemple
+    await pool.query(`
+      INSERT INTO examens (nom, annee, date_debut, date_fin) 
+      VALUES ('Examen de Fin d''Etudes Primaires', 2024, '2024-06-01', '2024-06-30')
+      ON CONFLICT DO NOTHING
+    `);
+    console.log('✅ Exemple d examen créé');
+
+    // 7. Insertion établissement de test
+    await pool.query(`
+      INSERT INTO etablissements (code, nom, login, password, secteur, niveau, commune) 
+      VALUES ('ETAB001', 'Ecole Primaire Publique Majunga', 'majunga', 'password123', 'public', 'primaire', 'Majunga')
+      ON CONFLICT (code) DO NOTHING
+    `);
+    console.log('✅ Établissement de test créé');
+
+    console.log('🎉 Base de données initialisée avec succès!');
+    
+    res.json({ 
+      success: true,
+      message: '✅ Base de données initialisée avec succès!',
+      tables: ['administrateurs', 'etablissements', 'examens', 'inscriptions']
+    });
+    
+  } catch (error) {
+    console.error('❌ Erreur lors de l initialisation:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Erreur lors de l initialisation: ' + error.message 
+    });
+  }
+});
+// === FIN DE LA ROUTE TEMPORAIRE ===
 
 // Démarrer le serveur
 app.listen(PORT, () => {
