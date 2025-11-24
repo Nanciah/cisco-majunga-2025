@@ -1,662 +1,652 @@
-import React, { useState } from 'react';
-import { adminService } from '../services/api';
+const express = require('express');
+const cors = require('cors');
+const { Pool } = require('pg');
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+require('dotenv').config();
 
-const LoginAdmin = ({ onLogin }) => {
-  const [formData, setFormData] = useState({
-    username: '',
-    password: ''
-  });
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState('');
+const app = express();
+const PORT = process.env.PORT || 10000;
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value
-    });
-    setError('');
-  };
+// Middleware
+app.use(cors());
+app.use(express.json());
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+// Configuration PostgreSQL
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
+
+// Fonction pour initialiser la base de données
+async function initializeDatabase() {
+  try {
+    console.log('🔄 Début de l initialisation de la base de données...');
     
-    if (!formData.username || !formData.password) {
-      setError('Veuillez remplir tous les champs');
-      return;
+    // Créer la table administrateurs
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS administrateurs (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        email VARCHAR(255),
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table administrateurs créée');
+
+    // Créer la table etablissements
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS etablissements (
+        id SERIAL PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        adresse TEXT,
+        ville VARCHAR(100),
+        telephone VARCHAR(20),
+        email VARCHAR(255),
+        password VARCHAR(255) DEFAULT 'etab123',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table etablissements créée');
+
+    // Créer la table examens
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS examens (
+        id SERIAL PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        date_examen DATE,
+        heure_debut TIME,
+        heure_fin TIME,
+        duree INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table examens créée');
+
+    // Créer la table inscriptions_eleves
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inscriptions_eleves (
+        id SERIAL PRIMARY KEY,
+        etablissement_id INTEGER REFERENCES etablissements(id),
+        examen_id INTEGER REFERENCES examens(id),
+        numero_inscription VARCHAR(100) UNIQUE NOT NULL,
+        eleve_nom VARCHAR(255) NOT NULL,
+        eleve_prenom VARCHAR(255) NOT NULL,
+        date_naissance DATE NOT NULL,
+        lieu_naissance VARCHAR(255),
+        classe VARCHAR(100),
+        statut VARCHAR(50) DEFAULT 'en_attente',
+        salle_examen VARCHAR(50),
+        centre_examen VARCHAR(255),
+        date_inscription TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table inscriptions_eleves créée');
+
+    // Vérifier si l'admin existe déjà
+    const adminCheck = await pool.query('SELECT COUNT(*) FROM administrateurs WHERE username = $1', ['admin']);
+    if (parseInt(adminCheck.rows[0].count) === 0) {
+      await pool.query(
+        'INSERT INTO administrateurs (username, password, email) VALUES ($1, $2, $3)',
+        ['admin', 'admin123', 'admin@sisco.mg']
+      );
+      console.log('✅ Administrateur par défaut créé');
     }
 
-    setLoading(true);
-    setError('');
+    // Vérifier si les établissements existent
+    const etabCheck = await pool.query('SELECT COUNT(*) FROM etablissements');
+    if (parseInt(etabCheck.rows[0].count) === 0) {
+      const etablissements = [
+        ['Lycée Jean Joseph Rabearivelo', 'LJJR001', 'Rue George V', 'Antananarivo', '+261 20 22 123 45', 'contact@ljjr.mg'],
+        ['Lycée Andohalo', 'LAN002', 'Place Andohalo', 'Antananarivo', '+261 20 22 234 56', 'info@andohalo.mg'],
+        ['Collège Saint Michel', 'CSM003', 'Ambatovinaky', 'Antananarivo', '+261 20 22 345 67', 'direction@stmichel.mg'],
+        ['Lycée Jules Ferry', 'LJF004', 'Analakely', 'Antananarivo', '+261 20 22 456 78', 'secretariat@jferry.mg'],
+        ['École Primaire Ampandrana', 'EPA005', 'Ampandrana Ouest', 'Antananarivo', '+261 20 22 567 89', 'epa@edu.mg']
+      ];
 
-    try {
-      const response = await adminService.login(formData);
-      const { token, admin } = response.data;
+      for (const etab of etablissements) {
+        await pool.query(
+          'INSERT INTO etablissements (nom, code, adresse, ville, telephone, email) VALUES ($1, $2, $3, $4, $5, $6)',
+          etab
+        );
+      }
+      console.log('✅ 5 établissements de test créés');
+    }
+
+    // Vérifier si les examens existent
+    const examCheck = await pool.query('SELECT COUNT(*) FROM examens');
+    if (parseInt(examCheck.rows[0].count) === 0) {
+      const examens = [
+        ['Baccalauréat Série A1', 'BAC-A1-2024', '2024-09-15', '08:00', '12:00', 240],
+        ['Baccalauréat Série A2', 'BAC-A2-2024', '2024-09-16', '08:00', '12:00', 240],
+        ['Baccalauréat Série C', 'BAC-C-2024', '2024-09-17', '08:00', '12:00', 240],
+        ['Baccalauréat Série D', 'BAC-D-2024', '2024-09-18', '08:00', '12:00', 240],
+        ['BEPC Session 2024', 'BEPC-2024', '2024-07-10', '08:00', '11:00', 180]
+      ];
+
+      for (const exam of examens) {
+        await pool.query(
+          'INSERT INTO examens (nom, code, date_examen, heure_debut, heure_fin, duree) VALUES ($1, $2, $3, $4, $5, $6)',
+          exam
+        );
+      }
+      console.log('✅ 5 examens de test créés');
+    }
+
+    console.log('🎉 Base de données initialisée avec succès!');
+  } catch (error) {
+    console.error('❌ Erreur lors de l initialisation de la base de données:', error.message);
+  }
+}
+
+// Middleware d'authentification
+function authenticateToken(req, res, next) {
+  const authHeader = req.headers['authorization'];
+  const token = authHeader && authHeader.split(' ')[1];
+
+  if (!token) {
+    return res.status(401).json({ error: 'Token d\'accès requis' });
+  }
+
+  jwt.verify(token, process.env.JWT_SECRET || 'sisco_super_secret_2024', (err, user) => {
+    if (err) {
+      return res.status(403).json({ error: 'Token invalide' });
+    }
+    req.user = user;
+    next();
+  });
+}
+
+// ==================== ROUTES DE L'API ====================
+
+// Route de test
+app.get('/', (req, res) => {
+  res.json({ 
+    message: '🚀 API SISCO Backend opérationnelle',
+    version: '1.0.0',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Route pour réinitialiser la base de données
+app.post('/api/init-db', async (req, res) => {
+  try {
+    await initializeDatabase();
+    res.json({ 
+      success: true, 
+      message: '✅ Base de données initialisée avec succès!' 
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: 'Erreur lors de l\'initialisation de la base de données' 
+    });
+  }
+});
+
+// Test de connexion à la base de données
+app.get('/api/test-db', async (req, res) => {
+  try {
+    const result = await pool.query('SELECT NOW() as current_time');
+    res.json({ 
+      success: true,
+      message: 'Connexion à PostgreSQL réussie',
+      current_time: result.rows[0].current_time
+    });
+  } catch (error) {
+    res.status(500).json({ 
+      success: false,
+      error: 'Erreur de connexion à PostgreSQL: ' + error.message 
+    });
+  }
+});
+
+// ==================== ROUTES ADMIN ====================
+
+// Login admin
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { username, password } = req.body;
+
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Nom d\'utilisateur et mot de passe requis' });
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM administrateurs WHERE username = $1',
+      [username]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Administrateur non trouvé' });
+    }
+
+    const admin = result.rows[0];
+    
+    // Vérifier le mot de passe
+    if (password !== admin.password) {
+      return res.status(401).json({ error: 'Mot de passe incorrect' });
+    }
+
+    const token = jwt.sign(
+      { 
+        id: admin.id, 
+        username: admin.username,
+        type: 'admin' 
+      },
+      process.env.JWT_SECRET || 'sisco_super_secret_2024',
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Connexion admin réussie',
+      token,
+      admin: {
+        id: admin.id,
+        username: admin.username,
+        email: admin.email,
+        type: 'admin'
+      }
+    });
+
+  } catch (error) {
+    console.error('Erreur login admin:', error);
+    res.status(500).json({ error: 'Erreur interne du serveur' });
+  }
+});
+
+// Récupérer les inscriptions (admin)
+app.get('/api/admin/inscriptions', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'admin') {
+      return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+
+    const { statut, etablissement_id } = req.query;
+    
+    let query = `
+      SELECT ie.*, e.nom as etablissement_nom, e.code as etablissement_code, ex.nom as examen_nom
+      FROM inscriptions_eleves ie 
+      JOIN etablissements e ON ie.etablissement_id = e.id 
+      JOIN examens ex ON ie.examen_id = ex.id 
+      WHERE 1=1
+    `;
+    const params = [];
+    let paramCount = 0;
+
+    if (statut) {
+      paramCount++;
+      query += ` AND ie.statut = $${paramCount}`;
+      params.push(statut);
+    }
+
+    if (etablissement_id) {
+      paramCount++;
+      query += ` AND ie.etablissement_id = $${paramCount}`;
+      params.push(etablissement_id);
+    }
+
+    query += ' ORDER BY ie.date_inscription DESC';
+
+    const result = await pool.query(query, params);
+    res.json({ 
+      success: true, 
+      inscriptions: result.rows 
+    });
+  } catch (error) {
+    console.error('Erreur récupération inscriptions admin:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Mettre à jour une inscription (admin)
+app.put('/api/admin/inscriptions/:id', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'admin') {
+      return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+
+    const { id } = req.params;
+    const { statut, salle_examen, centre_examen } = req.body;
+    
+    const result = await pool.query(
+      `UPDATE inscriptions_eleves 
+      SET statut = $1, salle_examen = $2, centre_examen = $3 
+      WHERE id = $4 RETURNING *`,
+      [statut, salle_examen, centre_examen, id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'Inscription non trouvée' });
+    }
+
+    res.json({ 
+      success: true,
+      message: 'Inscription mise à jour avec succès',
+      inscription: result.rows[0]
+    });
+  } catch (error) {
+    console.error('Erreur mise à jour inscription:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Route pour obtenir les statistiques admin
+app.get('/api/admin/stats', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'admin') {
+      return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+
+    const totalEtablissements = await pool.query('SELECT COUNT(*) FROM etablissements');
+    const totalExamens = await pool.query('SELECT COUNT(*) FROM examens');
+    const totalInscriptions = await pool.query('SELECT COUNT(*) FROM inscriptions_eleves');
+    
+    const statsParStatut = await pool.query(`
+      SELECT statut, COUNT(*) as count 
+      FROM inscriptions_eleves 
+      GROUP BY statut
+    `);
+
+    const statsParExamen = await pool.query(`
+      SELECT e.nom, COUNT(ie.id) as count
+      FROM examens e
+      LEFT JOIN inscriptions_eleves ie ON e.id = ie.examen_id
+      GROUP BY e.id, e.nom
+      ORDER BY count DESC
+    `);
+    
+    res.json({
+      success: true,
+      statistiques: {
+        totalEtablissements: parseInt(totalEtablissements.rows[0].count),
+        totalExamens: parseInt(totalExamens.rows[0].count),
+        totalInscriptions: parseInt(totalInscriptions.rows[0].count),
+        inscriptionsParStatut: statsParStatut.rows,
+        inscriptionsParExamen: statsParExamen.rows
+      }
+    });
+  } catch (error) {
+    console.error('Erreur stats:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ==================== ROUTES ÉTABLISSEMENT ====================
+
+// Login établissement
+app.post('/api/etablissements/login', async (req, res) => {
+  try {
+    const { code, password } = req.body;
+
+    if (!code || !password) {
+      return res.status(400).json({ error: 'Code établissement et mot de passe requis' });
+    }
+
+    const result = await pool.query(
+      'SELECT * FROM etablissements WHERE code = $1',
+      [code]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(401).json({ error: 'Établissement non trouvé' });
+    }
+
+    const etablissement = result.rows[0];
+    
+    // Vérifier le mot de passe
+    if (password !== etablissement.password) {
+      return res.status(401).json({ error: 'Mot de passe incorrect' });
+    }
+
+    const token = jwt.sign(
+      { 
+        id: etablissement.id, 
+        code: etablissement.code,
+        type: 'etablissement' 
+      },
+      process.env.JWT_SECRET || 'sisco_super_secret_2024',
+      { expiresIn: '24h' }
+    );
+
+    res.json({
+      success: true,
+      message: 'Connexion établissement réussie',
+      token,
+      etablissement: {
+        id: etablissement.id,
+        nom: etablissement.nom,
+        code: etablissement.code,
+        adresse: etablissement.adresse,
+        ville: etablissement.ville,
+        telephone: etablissement.telephone,
+        email: etablissement.email,
+        type: 'etablissement'
+      }
+    });
+
+  } catch (error) {
+    console.error('Erreur login établissement:', error);
+    res.status(500).json({ error: 'Erreur interne du serveur' });
+  }
+});
+
+// Créer une inscription (établissement)
+app.post('/api/etablissements/inscriptions', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'etablissement') {
+      return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+
+    const { eleves, examen_id } = req.body;
+    
+    if (!eleves || !examen_id || !Array.isArray(eleves)) {
+      return res.status(400).json({ error: 'Données élèves et examen requis' });
+    }
+
+    // Vérifier que l'examen existe
+    const examenCheck = await pool.query(
+      'SELECT id FROM examens WHERE id = $1',
+      [examen_id]
+    );
+
+    if (examenCheck.rows.length === 0) {
+      return res.status(404).json({ error: 'Examen non trouvé' });
+    }
+
+    const results = [];
+    
+    for (const eleve of eleves) {
+      // Vérifier les données obligatoires
+      if (!eleve.nom || !eleve.prenom || !eleve.date_naissance) {
+        continue; // Ignorer les élèves incomplets
+      }
+
+      // Générer un numéro d'inscription unique
+      const numero_inscription = `INS-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
       
-      onLogin(
-        { ...admin, type: 'admin' },
-        token
+      const result = await pool.query(
+        `INSERT INTO inscriptions_eleves 
+        (etablissement_id, examen_id, numero_inscription, eleve_nom, eleve_prenom, date_naissance, lieu_naissance, classe, statut) 
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
+        [
+          req.user.id,
+          examen_id,
+          numero_inscription,
+          eleve.nom.trim(),
+          eleve.prenom.trim(),
+          eleve.date_naissance,
+          eleve.lieu_naissance?.trim() || '',
+          eleve.classe?.trim() || '',
+          'en_attente'
+        ]
       );
       
-    } catch (error) {
-      console.error('Erreur de connexion:', error);
-      setError(error.response?.data?.error || 'Erreur de connexion. Vérifiez vos identifiants.');
-    } finally {
-      setLoading(false);
+      results.push(result.rows[0]);
     }
-  };
 
-  return (
-    <div className="login-page">
-      <div className="admin-login-container">
-        {/* Section sécurité */}
-        <div className="security-section">
-          <div className="security-content">
-            <div className="security-icon">🛡️</div>
-            <h1>Espace Administration</h1>
-            <p>Accès sécurisé au panneau d'administration du système</p>
-            
-            <div className="security-features">
-              <div className="security-item">
-                <span className="feature-icon">🔐</span>
-                <div>
-                  <strong>Authentification sécurisée</strong>
-                  <p>Accès restreint au personnel autorisé</p>
-                </div>
-              </div>
-              
-              <div className="security-item">
-                <span className="feature-icon">📊</span>
-                <div>
-                  <strong>Gestion complète</strong>
-                  <p>Supervision de tous les établissements</p>
-                </div>
-              </div>
-              
-              <div className="security-item">
-                <span className="feature-icon">⚡</span>
-                <div>
-                  <strong>Interface d'administration</strong>
-                  <p>Outils de gestion avancés</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="security-warning">
-              <span className="warning-icon">⚠️</span>
-              <p>Cet espace est réservé au personnel administratif autorisé</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Section formulaire */}
-        <div className="login-form-section">
-          <div className="admin-login-card">
-            <div className="login-header">
-              <div className="admin-icon">👑</div>
-              <h2>Connexion Administration</h2>
-              <p>Accès au panneau de contrôle</p>
-            </div>
-
-            {error && (
-              <div className="error-banner">
-                <div className="error-icon">🚫</div>
-                <div className="error-content">
-                  <strong>Accès refusé</strong>
-                  <p>{error}</p>
-                </div>
-              </div>
-            )}
-
-            <form onSubmit={handleSubmit} className="login-form">
-              <div className="form-group">
-                <label className="form-label">
-                  <span className="label-icon">👤</span>
-                  Identifiant administrateur
-                </label>
-                <input
-                  type="text"
-                  name="username"
-                  value={formData.username}
-                  onChange={handleChange}
-                  className="form-input"
-                  placeholder="Votre identifiant administrateur"
-                  disabled={loading}
-                />
-              </div>
-
-              <div className="form-group">
-                <label className="form-label">
-                  <span className="label-icon">🔑</span>
-                  Mot de passe
-                </label>
-                <input
-                  type="password"
-                  name="password"
-                  value={formData.password}
-                  onChange={handleChange}
-                  className="form-input"
-                  placeholder="Votre mot de passe administrateur"
-                  disabled={loading}
-                />
-              </div>
-
-              <button 
-                type="submit" 
-                className="btn btn-admin-login"
-                disabled={loading}
-              >
-                <span className="btn-icon">
-                  {loading ? '⏳' : '🚀'}
-                </span>
-                {loading ? 'Authentification en cours...' : 'Accéder au panneau'}
-                {!loading && <span className="btn-arrow">→</span>}
-              </button>
-            </form>
-
-            {/* Informations d'accès */}
-            <div className="access-info">
-              <div className="info-header">
-                <span className="info-icon">💡</span>
-                <h4>Identifiants de test</h4>
-              </div>
-              <div className="credentials">
-                <div className="credential-item">
-                  <span className="credential-label">Utilisateur:</span>
-                  <code className="credential-value">admin</code>
-                </div>
-                <div className="credential-item">
-                  <span className="credential-label">Mot de passe:</span>
-                  <code className="credential-value">admin123</code>
-                </div>
-              </div>
-              <div className="access-note">
-                <span className="note-icon">📝</span>
-                Ces identifiants sont pour l'environnement de test uniquement
-              </div>
-            </div>
-
-            {/* Sécurité */}
-            <div className="security-notice">
-              <div className="notice-content">
-                <span className="notice-icon">🔒</span>
-                <p>Votre session sera sécurisée et chiffrée</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <style>{`
-        .login-page {
-          min-height: 100vh;
-          background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          padding: 2rem;
-          font-family: 'Segoe UI', system-ui, sans-serif;
-        }
-
-        .admin-login-container {
-          display: grid;
-          grid-template-columns: 1fr 1fr;
-          max-width: 1200px;
-          width: 100%;
-          background: white;
-          border-radius: 20px;
-          box-shadow: 0 25px 50px rgba(0, 0, 0, 0.3);
-          overflow: hidden;
-          min-height: 750px;
-        }
-
-        /* Section sécurité */
-        .security-section {
-          background: linear-gradient(135deg, #1a2b3c 0%, #2c3e50 100%);
-          color: white;
-          padding: 3rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .security-section::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: 
-            radial-gradient(circle at 20% 80%, rgba(52, 152, 219, 0.1) 0%, transparent 50%),
-            radial-gradient(circle at 80% 20%, rgba(41, 128, 185, 0.1) 0%, transparent 50%);
-        }
-
-        .security-content {
-          text-align: center;
-          z-index: 1;
-          position: relative;
-          max-width: 400px;
-        }
-
-        .security-icon {
-          font-size: 4rem;
-          margin-bottom: 1.5rem;
-          display: block;
-          filter: drop-shadow(0 4px 8px rgba(0,0,0,0.3));
-        }
-
-        .security-content h1 {
-          font-size: 2.5rem;
-          margin-bottom: 1rem;
-          font-weight: 700;
-          background: linear-gradient(135deg, #3498db, #2ecc71);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-        }
-
-        .security-content p {
-          font-size: 1.1rem;
-          opacity: 0.9;
-          margin-bottom: 2.5rem;
-          line-height: 1.6;
-        }
-
-        .security-features {
-          display: flex;
-          flex-direction: column;
-          gap: 1.5rem;
-          margin-bottom: 2.5rem;
-        }
-
-        .security-item {
-          display: flex;
-          align-items: flex-start;
-          gap: 1rem;
-          padding: 1.25rem;
-          background: rgba(255, 255, 255, 0.08);
-          border-radius: 12px;
-          backdrop-filter: blur(10px);
-          border: 1px solid rgba(255, 255, 255, 0.1);
-          text-align: left;
-        }
-
-        .feature-icon {
-          font-size: 1.5rem;
-          width: 40px;
-          text-align: center;
-          flex-shrink: 0;
-          margin-top: 0.1rem;
-        }
-
-        .security-item strong {
-          display: block;
-          margin-bottom: 0.25rem;
-          font-size: 1rem;
-        }
-
-        .security-item p {
-          margin: 0;
-          font-size: 0.9rem;
-          opacity: 0.8;
-          line-height: 1.4;
-        }
-
-        .security-warning {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          padding: 1rem;
-          background: rgba(231, 76, 60, 0.1);
-          border: 1px solid rgba(231, 76, 60, 0.3);
-          border-radius: 8px;
-          backdrop-filter: blur(10px);
-        }
-
-        .warning-icon {
-          font-size: 1.2rem;
-          flex-shrink: 0;
-        }
-
-        .security-warning p {
-          margin: 0;
-          font-size: 0.9rem;
-          opacity: 0.9;
-        }
-
-        /* Section formulaire */
-        .login-form-section {
-          padding: 3rem;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          background: #f8f9fa;
-        }
-
-        .admin-login-card {
-          width: 100%;
-          max-width: 400px;
-        }
-
-        .login-header {
-          text-align: center;
-          margin-bottom: 2.5rem;
-        }
-
-        .admin-icon {
-          font-size: 3.5rem;
-          margin-bottom: 1rem;
-          display: block;
-          background: linear-gradient(135deg, #e74c3c, #e67e22);
-          -webkit-background-clip: text;
-          -webkit-text-fill-color: transparent;
-          filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
-        }
-
-        .login-header h2 {
-          color: #2c3e50;
-          font-size: 2rem;
-          margin-bottom: 0.5rem;
-          font-weight: 700;
-        }
-
-        .login-header p {
-          color: #7f8c8d;
-          margin: 0;
-          font-size: 1rem;
-        }
-
-        /* Bannière d'erreur */
-        .error-banner {
-          background: linear-gradient(135deg, #e74c3c, #c0392b);
-          color: white;
-          border-radius: 12px;
-          padding: 1.25rem;
-          margin-bottom: 1.5rem;
-          display: flex;
-          align-items: flex-start;
-          gap: 0.75rem;
-          box-shadow: 0 4px 12px rgba(231, 76, 60, 0.3);
-        }
-
-        .error-icon {
-          font-size: 1.3rem;
-          flex-shrink: 0;
-          margin-top: 0.1rem;
-        }
-
-        .error-content {
-          flex: 1;
-        }
-
-        .error-content strong {
-          display: block;
-          margin-bottom: 0.25rem;
-          font-size: 1rem;
-        }
-
-        .error-content p {
-          margin: 0;
-          font-size: 0.9rem;
-          opacity: 0.9;
-        }
-
-        /* Formulaire */
-        .login-form {
-          margin-bottom: 2rem;
-        }
-
-        .form-group {
-          margin-bottom: 1.5rem;
-        }
-
-        .form-label {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          margin-bottom: 0.5rem;
-          font-weight: 600;
-          color: #2c3e50;
-          font-size: 0.95rem;
-        }
-
-        .label-icon {
-          font-size: 1.1rem;
-          opacity: 0.8;
-        }
-
-        .form-input {
-          width: 100%;
-          padding: 1rem 1.25rem;
-          border: 2px solid #dcdfe3;
-          border-radius: 12px;
-          font-size: 1rem;
-          transition: all 0.3s ease;
-          background: white;
-          color: #2c3e50;
-        }
-
-        .form-input:focus {
-          outline: none;
-          border-color: #3498db;
-          background: white;
-          box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
-          transform: translateY(-1px);
-        }
-
-        .form-input:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-          background: #f8f9fa;
-        }
-
-        /* Bouton de connexion */
-        .btn-admin-login {
-          width: 100%;
-          padding: 1.25rem 2rem;
-          font-size: 1.1rem;
-          font-weight: 600;
-          border-radius: 12px;
-          margin-top: 0.5rem;
-          transition: all 0.3s ease;
-          position: relative;
-          overflow: hidden;
-        }
-
-        .btn {
-          border: none;
-          cursor: pointer;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          gap: 0.75rem;
-          transition: all 0.3s ease;
-        }
-
-        .btn:disabled {
-          opacity: 0.6;
-          cursor: not-allowed;
-          transform: none !important;
-        }
-
-        .btn-admin-login {
-          background: linear-gradient(135deg, #e74c3c, #e67e22);
-          color: white;
-        }
-
-        .btn-admin-login:hover:not(:disabled) {
-          transform: translateY(-2px);
-          box-shadow: 0 8px 25px rgba(231, 76, 60, 0.4);
-        }
-
-        .btn-admin-login::before {
-          content: '';
-          position: absolute;
-          top: 0;
-          left: -100%;
-          width: 100%;
-          height: 100%;
-          background: linear-gradient(90deg, transparent, rgba(255,255,255,0.2), transparent);
-          transition: left 0.5s;
-        }
-
-        .btn-admin-login:hover:not(:disabled)::before {
-          left: 100%;
-        }
-
-        .btn-icon {
-          font-size: 1.2rem;
-        }
-
-        .btn-arrow {
-          font-size: 1.1rem;
-          margin-left: auto;
-          opacity: 0.8;
-        }
-
-        /* Informations d'accès */
-        .access-info {
-          background: linear-gradient(135deg, #34495e, #2c3e50);
-          color: white;
-          border-radius: 12px;
-          padding: 1.5rem;
-          margin-bottom: 1.5rem;
-        }
-
-        .info-header {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          margin-bottom: 1rem;
-        }
-
-        .info-icon {
-          font-size: 1.2rem;
-        }
-
-        .info-header h4 {
-          margin: 0;
-          color: #ecf0f1;
-          font-size: 1rem;
-        }
-
-        .credentials {
-          space-y: 0.75rem;
-        }
-
-        .credential-item {
-          display: flex;
-          justify-content: space-between;
-          align-items: center;
-          margin-bottom: 0.75rem;
-        }
-
-        .credential-label {
-          color: #bdc3c7;
-          font-weight: 500;
-          font-size: 0.9rem;
-        }
-
-        .credential-value {
-          background: rgba(255, 255, 255, 0.1);
-          padding: 0.4rem 0.75rem;
-          border-radius: 6px;
-          font-family: 'Courier New', monospace;
-          font-weight: 600;
-          color: #3498db;
-          border: 1px solid rgba(52, 152, 219, 0.3);
-          font-size: 0.9rem;
-        }
-
-        .access-note {
-          display: flex;
-          align-items: center;
-          gap: 0.5rem;
-          margin-top: 1rem;
-          padding-top: 1rem;
-          border-top: 1px solid rgba(255, 255, 255, 0.1);
-          font-size: 0.8rem;
-          color: #95a5a6;
-        }
-
-        .note-icon {
-          font-size: 0.9rem;
-          flex-shrink: 0;
-        }
-
-        /* Avis de sécurité */
-        .security-notice {
-          background: #ecf0f1;
-          border: 1px solid #bdc3c7;
-          border-radius: 8px;
-          padding: 1rem;
-        }
-
-        .notice-content {
-          display: flex;
-          align-items: center;
-          gap: 0.75rem;
-          justify-content: center;
-        }
-
-        .notice-icon {
-          font-size: 1.1rem;
-          color: #27ae60;
-        }
-
-        .notice-content p {
-          margin: 0;
-          color: #7f8c8d;
-          font-size: 0.85rem;
-          font-weight: 500;
-        }
-
-        /* Responsive */
-        @media (max-width: 968px) {
-          .admin-login-container {
-            grid-template-columns: 1fr;
-            max-width: 500px;
-          }
-
-          .security-section {
-            padding: 2rem;
-            display: none; /* Cacher sur mobile pour plus de simplicité */
-          }
-
-          .login-form-section {
-            padding: 2rem;
-          }
-
-          .security-content h1 {
-            font-size: 2rem;
-          }
-        }
-
-        @media (max-width: 480px) {
-          .login-page {
-            padding: 1rem;
-          }
-
-          .login-form-section {
-            padding: 1.5rem;
-          }
-
-          .login-header h2 {
-            font-size: 1.75rem;
-          }
-
-          .form-input {
-            padding: 0.875rem 1rem;
-          }
-
-          .btn-admin-login {
-            padding: 1rem 1.5rem;
-          }
-        }
-      `}</style>
-    </div>
-  );
-};
-
-export default LoginAdmin;
+    if (results.length === 0) {
+      return res.status(400).json({ error: 'Aucun élève valide à inscrire' });
+    }
+
+    res.json({
+      success: true,
+      message: `${results.length} élève(s) inscrit(s) avec succès`,
+      inscriptions: results
+    });
+
+  } catch (error) {
+    console.error('Erreur création inscription:', error);
+    res.status(500).json({ error: 'Erreur lors de l\'inscription des élèves' });
+  }
+});
+
+// Récupérer les inscriptions d'un établissement
+app.get('/api/etablissements/inscriptions', authenticateToken, async (req, res) => {
+  try {
+    if (req.user.type !== 'etablissement') {
+      return res.status(403).json({ error: 'Accès non autorisé' });
+    }
+
+    const result = await pool.query(`
+      SELECT ie.*, e.nom as examen_nom, e.code as examen_code
+      FROM inscriptions_eleves ie
+      JOIN examens e ON ie.examen_id = e.id
+      WHERE ie.etablissement_id = $1
+      ORDER BY ie.date_inscription DESC
+    `, [req.user.id]);
+
+    res.json({ 
+      success: true, 
+      inscriptions: result.rows 
+    });
+
+  } catch (error) {
+    console.error('Erreur récupération inscriptions établissement:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Récupérer les examens disponibles
+app.get('/api/etablissements/examens', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM examens 
+      WHERE date_examen >= CURRENT_DATE OR date_examen IS NULL
+      ORDER BY date_examen ASC
+    `);
+
+    res.json({ 
+      success: true, 
+      examens: result.rows 
+    });
+
+  } catch (error) {
+    console.error('Erreur récupération examens:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// ==================== ROUTES PUBLIQUES ====================
+
+// Récupérer tous les établissements
+app.get('/api/etablissements', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM etablissements 
+      ORDER BY nom ASC
+    `);
+    res.json({ success: true, etablissements: result.rows });
+  } catch (error) {
+    console.error('Erreur récupération établissements:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Rechercher des établissements
+app.get('/api/etablissements/search', async (req, res) => {
+  try {
+    const { nom, code, ville } = req.query;
+    let query = 'SELECT * FROM etablissements WHERE 1=1';
+    const params = [];
+    let paramCount = 0;
+
+    if (nom) {
+      paramCount++;
+      query += ` AND nom ILIKE $${paramCount}`;
+      params.push(`%${nom}%`);
+    }
+
+    if (code) {
+      paramCount++;
+      query += ` AND code ILIKE $${paramCount}`;
+      params.push(`%${code}%`);
+    }
+
+    if (ville) {
+      paramCount++;
+      query += ` AND ville ILIKE $${paramCount}`;
+      params.push(`%${ville}%`);
+    }
+
+    query += ' ORDER BY nom ASC';
+
+    const result = await pool.query(query, params);
+    res.json({ success: true, etablissements: result.rows });
+  } catch (error) {
+    console.error('Erreur recherche établissements:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Récupérer tous les examens
+app.get('/api/examens', async (req, res) => {
+  try {
+    const result = await pool.query(`
+      SELECT * FROM examens 
+      ORDER BY date_examen DESC
+    `);
+    res.json({ success: true, examens: result.rows });
+  } catch (error) {
+    console.error('Erreur récupération examens:', error);
+    res.status(500).json({ error: 'Erreur serveur' });
+  }
+});
+
+// Gestion des erreurs 404
+app.use('*', (req, res) => {
+  res.status(404).json({ error: 'Route non trouvée' });
+});
+
+// ==================== DÉMARRAGE DU SERVEUR ====================
+
+async function startServer() {
+  try {
+    // Tester la connexion à la base de données
+    const client = await pool.connect();
+    console.log('✅ Connecté à PostgreSQL avec succès');
+    client.release();
+    
+    // Initialiser la base de données
+    await initializeDatabase();
+    
+    // Démarrer le serveur
+    app.listen(PORT, () => {
+      console.log(`🚀 Serveur backend SISCO démarré sur le port ${PORT}`);
+      console.log(`📊 URL: http://localhost:${PORT}`);
+      console.log(`🔗 API Base URL: https://cisco-majunga-2025.onrender.com`);
+    });
+  } catch (error) {
+    console.error('❌ Erreur au démarrage du serveur:', error);
+    process.exit(1);
+  }
+}
+
+// Démarrer l'application
+startServer();
+
+module.exports = app;
