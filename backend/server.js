@@ -14,7 +14,7 @@ app.use(express.json());
 
 // Configuration PostgreSQL
 const pool = new Pool({
-  connectionString: process.env.DB_URL || `postgresql://${process.env.DB_USER}:${process.env.DB_PASSWORD}@${process.env.DB_HOST}:${process.env.DB_PORT}/${process.env.DB_NAME}`,
+  connectionString: process.env.DATABASE_URL,
   ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
 });
 
@@ -27,6 +27,135 @@ pool.on('error', (err) => {
   console.error('❌ Erreur connexion PostgreSQL:', err);
 });
 
+// Fonction pour initialiser la base de données
+async function initializeDatabase() {
+  try {
+    console.log('🔄 Initialisation de la base de données...');
+    
+    // Créer les tables si elles n'existent pas
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS administrateurs (
+        id SERIAL PRIMARY KEY,
+        username VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        nom VARCHAR(255),
+        prenom VARCHAR(255),
+        role VARCHAR(50) DEFAULT 'admin',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table administrateurs créée');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS etablissements (
+        id SERIAL PRIMARY KEY,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        nom VARCHAR(255) NOT NULL,
+        login VARCHAR(100) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        secteur VARCHAR(50),
+        niveau VARCHAR(50),
+        commune VARCHAR(255),
+        zap VARCHAR(100),
+        fokontany VARCHAR(255),
+        village VARCHAR(255),
+        remarques TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table etablissements créée');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS examens (
+        id SERIAL PRIMARY KEY,
+        nom VARCHAR(255) NOT NULL,
+        code VARCHAR(50) UNIQUE NOT NULL,
+        description TEXT,
+        date_examen DATE,
+        heure_debut TIME,
+        heure_fin TIME,
+        duree INTEGER,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table examens créée');
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS inscriptions (
+        id SERIAL PRIMARY KEY,
+        etablissement_id INTEGER REFERENCES etablissements(id),
+        examen_id INTEGER REFERENCES examens(id),
+        numero_inscription VARCHAR(100) UNIQUE NOT NULL,
+        eleve_nom VARCHAR(255) NOT NULL,
+        eleve_prenom VARCHAR(255) NOT NULL,
+        date_naissance DATE NOT NULL,
+        lieu_naissance VARCHAR(255),
+        classe VARCHAR(100),
+        statut VARCHAR(50) DEFAULT 'en_attente',
+        salle_examen VARCHAR(50),
+        centre_examen VARCHAR(255),
+        date_inscription TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('✅ Table inscriptions créée');
+
+    // Vérifier si l'admin existe déjà
+    const adminCheck = await pool.query('SELECT COUNT(*) FROM administrateurs WHERE username = $1', ['admin']);
+    if (parseInt(adminCheck.rows[0].count) === 0) {
+      await pool.query(
+        'INSERT INTO administrateurs (username, password, nom, prenom) VALUES ($1, $2, $3, $4)',
+        ['admin', 'admin123', 'Admin', 'SISCO']
+      );
+      console.log('✅ Administrateur par défaut créé');
+    }
+
+    // Vérifier si les établissements existent
+    const etabCheck = await pool.query('SELECT COUNT(*) FROM etablissements');
+    if (parseInt(etabCheck.rows[0].count) === 0) {
+      const etablissements = [
+        ['LJJR001', 'Lycée Jean Joseph Rabearivelo', 'LJJR001', 'etab123', 'Public', 'Lycée', 'Antananarivo', 'ZAP Centre', 'Andohalo'],
+        ['LAN002', 'Lycée Andohalo', 'LAN002', 'etab123', 'Public', 'Lycée', 'Antananarivo', 'ZAP Centre', 'Andohalo'],
+        ['CSM003', 'Collège Saint Michel', 'CSM003', 'etab123', 'Privé', 'Collège', 'Antananarivo', 'ZAP Centre', 'Ambatovinaky'],
+        ['LJF004', 'Lycée Jules Ferry', 'LJF004', 'etab123', 'Public', 'Lycée', 'Antananarivo', 'ZAP Centre', 'Analakely'],
+        ['EPA005', 'École Primaire Ampandrana', 'EPA005', 'etab123', 'Public', 'Primaire', 'Antananarivo', 'ZAP Nord', 'Ampandrana']
+      ];
+
+      for (const etab of etablissements) {
+        await pool.query(
+          'INSERT INTO etablissements (code, nom, login, password, secteur, niveau, commune, zap, fokontany) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          etab
+        );
+      }
+      console.log('✅ Établissements d\'exemple créés');
+    }
+
+    // Vérifier si les examens existent
+    const examCheck = await pool.query('SELECT COUNT(*) FROM examens');
+    if (parseInt(examCheck.rows[0].count) === 0) {
+      const examens = [
+        ['Baccalauréat Série A1', 'BAC-A1-2024', 'Examen du Baccalauréat Série A1', '2024-09-15', '08:00', '12:00', 240],
+        ['Baccalauréat Série C', 'BAC-C-2024', 'Examen du Baccalauréat Série C', '2024-09-16', '08:00', '12:00', 240],
+        ['BEPC Session 2024', 'BEPC-2024', 'Brevet d\'Études du Premier Cycle', '2024-07-10', '08:00', '11:00', 180]
+      ];
+
+      for (const exam of examens) {
+        await pool.query(
+          'INSERT INTO examens (nom, code, description, date_examen, heure_debut, heure_fin, duree) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+          exam
+        );
+      }
+      console.log('✅ Examens d\'exemple créés');
+    }
+
+    console.log('🎉 Base de données initialisée avec succès!');
+  } catch (error) {
+    console.error('❌ Erreur initialisation DB:', error);
+  }
+}
+
+// Appeler l'initialisation au démarrage
+initializeDatabase();
+
 // Middleware d'authentification
 const authenticateToken = (req, res, next) => {
     const authHeader = req.headers['authorization'];
@@ -36,7 +165,7 @@ const authenticateToken = (req, res, next) => {
         return res.status(401).json({ error: 'Token requis' });
     }
 
-    jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+    jwt.verify(token, process.env.JWT_SECRET || 'sisco_super_secret_2024', (err, user) => {
         if (err) {
             return res.status(403).json({ error: 'Token invalide' });
         }
@@ -44,6 +173,15 @@ const authenticateToken = (req, res, next) => {
         next();
     });
 };
+
+// Route de test
+app.get('/', (req, res) => {
+    res.json({ 
+        message: '🚀 API SISCO Backend opérationnelle',
+        version: '1.0.0',
+        timestamp: new Date().toISOString()
+    });
+});
 
 // Test de connexion à la base de données
 app.get('/api/test-db', async (req, res) => {
@@ -55,6 +193,16 @@ app.get('/api/test-db', async (req, res) => {
         });
     } catch (error) {
         res.status(500).json({ error: 'Erreur de connexion à PostgreSQL: ' + error.message });
+    }
+});
+
+// Route pour réinitialiser la base de données
+app.post('/api/init-db', async (req, res) => {
+    try {
+        await initializeDatabase();
+        res.json({ success: true, message: 'Base de données initialisée avec succès' });
+    } catch (error) {
+        res.status(500).json({ error: 'Erreur initialisation DB' });
     }
 });
 
@@ -114,15 +262,15 @@ app.get('/api/etablissements/search', async (req, res) => {
 // Routes d'authentification
 app.post('/api/etablissements/login', async (req, res) => {
     try {
-        const { login, password } = req.body;
+        const { code, password } = req.body;
         
-        if (!login || !password) {
-            return res.status(400).json({ error: 'Login et mot de passe requis' });
+        if (!code || !password) {
+            return res.status(400).json({ error: 'Code établissement et mot de passe requis' });
         }
 
         const result = await pool.query(
-            'SELECT * FROM etablissements WHERE login = $1',
-            [login]
+            'SELECT * FROM etablissements WHERE code = $1',
+            [code]
         );
 
         if (result.rows.length === 0) {
@@ -131,7 +279,7 @@ app.post('/api/etablissements/login', async (req, res) => {
 
         const etablissement = result.rows[0];
         
-        // Vérification du mot de passe (identique pour tous)
+        // Vérification du mot de passe
         if (password !== etablissement.password) {
             return res.status(401).json({ error: 'Mot de passe incorrect' });
         }
@@ -143,11 +291,13 @@ app.post('/api/etablissements/login', async (req, res) => {
                 nom: etablissement.nom,
                 type: 'etablissement' 
             },
-            process.env.JWT_SECRET,
+            process.env.JWT_SECRET || 'sisco_super_secret_2024',
             { expiresIn: '24h' }
         );
 
         res.json({
+            success: true,
+            message: 'Connexion réussie',
             token,
             etablissement: {
                 id: etablissement.id,
@@ -155,11 +305,12 @@ app.post('/api/etablissements/login', async (req, res) => {
                 nom: etablissement.nom,
                 secteur: etablissement.secteur,
                 niveau: etablissement.niveau,
-                commune: etablissement.commune
+                commune: etablissement.commune,
+                type: 'etablissement'
             }
         });
     } catch (error) {
-        console.error('Erreur login:', error);
+        console.error('Erreur login établissement:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
     }
 });
@@ -197,18 +348,21 @@ app.post('/api/admin/login', async (req, res) => {
                 role: admin.role,
                 type: 'admin' 
             },
-            process.env.JWT_SECRET,
+            process.env.JWT_SECRET || 'sisco_super_secret_2024',
             { expiresIn: '24h' }
         );
 
         res.json({
+            success: true,
+            message: 'Connexion admin réussie',
             token,
             admin: {
                 id: admin.id,
                 username: admin.username,
                 nom: admin.nom,
                 prenom: admin.prenom,
-                role: admin.role
+                role: admin.role,
+                type: 'admin'
             }
         });
     } catch (error) {
@@ -220,8 +374,8 @@ app.post('/api/admin/login', async (req, res) => {
 // Routes pour les examens
 app.get('/api/examens', async (req, res) => {
     try {
-        const result = await pool.query('SELECT * FROM examens ORDER BY id');
-        res.json(result.rows);
+        const result = await pool.query('SELECT * FROM examens ORDER BY date_examen DESC');
+        res.json({ success: true, examens: result.rows });
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -266,14 +420,11 @@ app.post('/api/inscriptions', authenticateToken, async (req, res) => {
                 ]
             );
             
-            results.push({
-                id: result.rows[0].id,
-                numero_inscription,
-                ...eleve
-            });
+            results.push(result.rows[0]);
         }
 
         res.json({ 
+            success: true,
             message: `${results.length} inscription(s) enregistrée(s) avec succès`, 
             inscriptions: results 
         });
@@ -297,7 +448,7 @@ app.get('/api/etablissement/inscriptions', authenticateToken, async (req, res) =
             ORDER BY i.date_inscription DESC
         `, [req.user.id]);
 
-        res.json(result.rows);
+        res.json({ success: true, inscriptions: result.rows });
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -338,7 +489,7 @@ app.get('/api/admin/inscriptions', authenticateToken, async (req, res) => {
         query += ' ORDER BY i.date_inscription DESC';
 
         const result = await pool.query(query, params);
-        res.json(result.rows);
+        res.json({ success: true, inscriptions: result.rows });
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -353,14 +504,18 @@ app.put('/api/admin/inscriptions/:id', authenticateToken, async (req, res) => {
 
         const { statut, salle_examen, centre_examen } = req.body;
         
-        await pool.query(
+        const result = await pool.query(
             `UPDATE inscriptions 
             SET statut = $1, salle_examen = $2, centre_examen = $3 
-            WHERE id = $4`,
+            WHERE id = $4 RETURNING *`,
             [statut, salle_examen, centre_examen, req.params.id]
         );
 
-        res.json({ message: 'Inscription mise à jour avec succès' });
+        res.json({ 
+            success: true,
+            message: 'Inscription mise à jour avec succès',
+            inscription: result.rows[0]
+        });
     } catch (error) {
         console.error('Erreur:', error);
         res.status(500).json({ error: 'Erreur serveur: ' + error.message });
@@ -384,15 +539,20 @@ app.get('/api/admin/stats', authenticateToken, async (req, res) => {
         `);
 
         const etablissementsStats = await pool.query(`
-            SELECT 
-                COUNT(*) as total_etablissements,
-                COUNT(DISTINCT etablissement_id) as etablissements_actifs
-            FROM inscriptions
+            SELECT COUNT(*) as total_etablissements FROM etablissements
+        `);
+
+        const examensStats = await pool.query(`
+            SELECT COUNT(*) as total_examens FROM examens
         `);
         
         res.json({
-            inscriptions: inscriptionsStats.rows[0],
-            etablissements: etablissementsStats.rows[0]
+            success: true,
+            statistiques: {
+                inscriptions: inscriptionsStats.rows[0],
+                etablissements: etablissementsStats.rows[0],
+                examens: examensStats.rows[0]
+            }
         });
     } catch (error) {
         console.error('Erreur stats:', error);
