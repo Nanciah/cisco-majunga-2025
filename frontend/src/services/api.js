@@ -36,9 +36,15 @@ api.interceptors.response.use(
 
 // Services API
 export const etablissementService = {
+  // Services pour les établissements
   getEtablissements: () => api.get('/etablissements'),
   searchEtablissements: (params) => api.get('/etablissements/search', { params }),
   login: (credentials) => api.post('/etablissements/login', credentials),
+  
+  // Nouvelles routes pour l'espace établissement
+  getInscriptions: () => api.get('/etablissements/inscriptions'),
+  createInscription: (data) => api.post('/etablissements/inscriptions', data),
+  getExamens: () => api.get('/etablissements/examens'),
 };
 
 export const adminService = {
@@ -48,9 +54,10 @@ export const adminService = {
   getStats: () => api.get('/admin/stats'),
 };
 
+// Services dépréciés - à utiliser etablissementService à la place
 export const inscriptionService = {
-  create: (data) => api.post('/inscriptions', data),
-  getEtablissementInscriptions: () => api.get('/etablissement/inscriptions'),
+  create: (data) => api.post('/etablissements/inscriptions', data),
+  getEtablissementInscriptions: () => api.get('/etablissements/inscriptions'),
 };
 
 export const examenService = {
