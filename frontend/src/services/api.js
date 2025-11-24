@@ -1,6 +1,7 @@
 import axios from 'axios';
 
-const API_BASE_URL = 'https://cisco-majunga-2025.onrender.com/api';
+// ✅ CORRECTION : Enlever /api de l'URL de base
+const API_BASE_URL = 'https://cisco-majunga-2025.onrender.com';
 
 // Configuration axios avec intercepteur pour le token
 const api = axios.create({
@@ -34,38 +35,38 @@ api.interceptors.response.use(
   }
 );
 
-// Services API
+// Services API - Les routes incluent déjà /api
 export const etablissementService = {
   // Services pour les établissements
-  getEtablissements: () => api.get('/etablissements'),
-  searchEtablissements: (params) => api.get('/etablissements/search', { params }),
-  login: (credentials) => api.post('/etablissements/login', credentials),
+  getEtablissements: () => api.get('/api/etablissements'),
+  searchEtablissements: (params) => api.get('/api/etablissements/search', { params }),
+  login: (credentials) => api.post('/api/etablissements/login', credentials),
   
-  // Nouvelles routes pour l'espace établissement
-  getInscriptions: () => api.get('/etablissements/inscriptions'),
-  createInscription: (data) => api.post('/etablissements/inscriptions', data),
-  getExamens: () => api.get('/etablissements/examens'),
+  // Routes pour l'espace établissement
+  getInscriptions: () => api.get('/api/etablissements/inscriptions'),
+  createInscription: (data) => api.post('/api/etablissements/inscriptions', data),
+  getExamens: () => api.get('/api/etablissements/examens'),
 };
 
 export const adminService = {
-  login: (credentials) => api.post('/admin/login', credentials),
-  getInscriptions: (params) => api.get('/admin/inscriptions', { params }),
-  updateInscription: (id, data) => api.put(`/admin/inscriptions/${id}`, data),
-  getStats: () => api.get('/admin/stats'),
+  login: (credentials) => api.post('/api/admin/login', credentials),
+  getInscriptions: (params) => api.get('/api/admin/inscriptions', { params }),
+  updateInscription: (id, data) => api.put(`/api/admin/inscriptions/${id}`, data),
+  getStats: () => api.get('/api/admin/stats'),
 };
 
-// Services dépréciés - à utiliser etablissementService à la place
+// Services dépréciés - À utiliser etablissementService à la place
 export const inscriptionService = {
-  create: (data) => api.post('/etablissements/inscriptions', data),
-  getEtablissementInscriptions: () => api.get('/etablissements/inscriptions'),
+  create: (data) => api.post('/api/etablissements/inscriptions', data),
+  getEtablissementInscriptions: () => api.get('/api/etablissements/inscriptions'),
 };
 
 export const examenService = {
-  getExamens: () => api.get('/examens'),
+  getExamens: () => api.get('/api/examens'),
 };
 
 export const testService = {
-  testDB: () => api.get('/test-db'),
+  testDB: () => api.get('/api/test-db'),
 };
 
 export default api;
